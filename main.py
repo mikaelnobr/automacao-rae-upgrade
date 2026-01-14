@@ -5,48 +5,13 @@ import re
 import json
 import time
 import tempfile
+import uuid
 from io import BytesIO
 
-# --- CONFIGURAÇÃO INICIAL ---
+# --- 1. CONFIGURAÇÃO INICIAL (DEVE SER A PRIMEIRA LINHA) ---
 st.set_page_config(page_title="Automação RAE CAIXA", page_icon="🏛️", layout="centered")
 
-# --- BANCO DE DADOS DE PROFISSIONAIS ---
-PROFISSIONAIS = {
-    "FRANCISCO DAVID MENESES DOS SANTOS": {
-        "empresa": "FRANCISCO DAVID MENESES DOS SANTOS - F. D. MENESES DOS SANTOS",
-        "cnpj": "54.801.096/0001-16",
-        "cpf_emp": "058.756.003-73",
-        "nome_resp": "FRANCISCO DAVID MENESES DOS SANTOS",
-        "cpf_resp": "058.756.003-73",
-        "registro": "336241CE"
-    },
-    "PALLOMA TEIXEIRA DA SILVA": {
-        "empresa": "PALLOMA TEIXEIRA DA SILVA - PALLOMA TEIXEIRA ARQUITETURA LTDA",
-        "cnpj": "54.862.474/0001-71",
-        "cpf_emp": "064.943.593-10",
-        "nome_resp": "PALLOMA TEIXEIRA DA SILVA",
-        "cpf_resp": "064.943.593-10",
-        "registro": "A184355-9"
-    },
-    "SANDY PEREIRA CORDEIRO": {
-        "empresa": "SANDY PEREIRA CORDEIRO - CS ENGENHARIA",
-        "cnpj": "54.794.898/0001-46",
-        "cpf_emp": "071.222.553-60",
-        "nome_resp": "SANDY PEREIRA CORDEIRO",
-        "cpf_resp": "071.222.553-60",
-        "registro": "356882CE"
-    },
-    "TIAGO VICTOR DE SOUSA": {
-        "empresa": "TIAGO VICTOR DE SOUSA - T V S ENGENHARIA E ASSESSORIA",
-        "cnpj": "54.806.521/0001-60",
-        "cpf_emp": "068.594.803-00",
-        "nome_resp": "TIAGO VICTOR DE SOUSA",
-        "cpf_resp": "068.594.803-00",
-        "registro": "346856CE"
-    }
-}
-
-# --- PATCH DE METADADOS ---
+# --- 2. PATCH DE METADADOS (EVITA CRASH NO BOOT) ---
 try:
     import importlib.metadata as metadata
 except ImportError:
@@ -66,7 +31,31 @@ def patched_version(package_name):
         return versions.get(package_name, "1.0.0")
 metadata.version = patched_version
 
-# --- IMPORTAÇÃO ---
+# --- 3. BANCO DE DADOS DE PROFISSIONAIS ---
+PROFISSIONAIS = {
+    "FRANCISCO DAVID MENESES DOS SANTOS": {
+        "empresa": "FRANCISCO DAVID MENESES DOS SANTOS - F. D. MENESES DOS SANTOS",
+        "cnpj": "54.801.096/0001-16", "cpf_emp": "058.756.003-73",
+        "nome_resp": "FRANCISCO DAVID MENESES DOS SANTOS", "cpf_resp": "058.756.003-73", "registro": "336241CE"
+    },
+    "PALLOMA TEIXEIRA DA SILVA": {
+        "empresa": "PALLOMA TEIXEIRA DA SILVA - PALLOMA TEIXEIRA ARQUITETURA LTDA",
+        "cnpj": "54.862.474/0001-71", "cpf_emp": "064.943.593-10",
+        "nome_resp": "PALLOMA TEIXEIRA DA SILVA", "cpf_resp": "064.943.593-10", "registro": "A184355-9"
+    },
+    "SANDY PEREIRA CORDEIRO": {
+        "empresa": "SANDY PEREIRA CORDEIRO - CS ENGENHARIA",
+        "cnpj": "54.794.898/0001-46", "cpf_emp": "071.222.553-60",
+        "nome_resp": "SANDY PEREIRA CORDEIRO", "cpf_resp": "071.222.553-60", "registro": "356882CE"
+    },
+    "TIAGO VICTOR DE SOUSA": {
+        "empresa": "TIAGO VICTOR DE SOUSA - T V S ENGENHARIA E ASSESSORIA",
+        "cnpj": "54.806.521/0001-60", "cpf_emp": "068.594.803-00",
+        "nome_resp": "TIAGO VICTOR DE SOUSA", "cpf_resp": "068.594.803-00", "registro": "346856CE"
+    }
+}
+
+# --- 4. IMPORTAÇÕES ---
 try:
     import pandas as pd
     from openpyxl import load_workbook
@@ -74,22 +63,17 @@ try:
     from docling.datamodel.pipeline_options import PdfPipelineOptions
     from docling.datamodel.base_models import InputFormat
     import google.generativeai as genai
+    import onnxruntime
+    import optree
     DEPENDENCIAS_OK = True
-except ImportError as e:
+except Exception as e:
     DEPENDENCIAS_OK = False
     ERRO_IMPORT = str(e)
 
-# --- ESTILIZAÇÃO ---
-st.markdown("""
-    <style>
-    .main { background-color: #ffffff; }
-    .stButton>button { width: 100%; border-radius: 8px; height: 3.5em; background-color: #4f46e5; color: white; font-weight: bold; border: none; }
-    .stDownloadButton>button { width: 100%; border-radius: 8px; background-color: #059669; color: white; border: none; }
-    </style>
-    """, unsafe_allow_html=True)
-
+# --- 5. LÓGICA DE IA ---
 @st.cache_resource
 def get_converter():
+    """Cache do motor Docling para economizar RAM."""
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_table_structure = True 
     pipeline_options.table_structure_options.do_cell_matching = True
@@ -107,14 +91,14 @@ def call_gemini(api_key, prompt):
             return json.loads(response.text)
         except:
             time.sleep(2)
-    raise Exception("Erro ao consultar a IA.")
+    return None
 
 def main():
     st.title("🏛️ Automação RAE CAIXA")
-    st.markdown("##### IA Avançada: Laudo + PLS + Alvará (OCR Integrado)")
+    st.markdown("##### Multidocumentos: Laudo + PLS + Alvará (OCR)")
 
     if not DEPENDENCIAS_OK:
-        st.error(f"Erro de dependências: {ERRO_IMPORT}")
+        st.error(f"Erro Crítico: {ERRO_IMPORT}")
         return
 
     with st.sidebar:
@@ -123,90 +107,91 @@ def main():
         st.divider()
         st.subheader("👤 Responsável Técnico")
         resp_selecionado = st.selectbox("Selecione o Profissional:", options=list(PROFISSIONAIS.keys()))
-        st.caption("v5.0 - Multidocumentos & OCR")
+        st.divider()
+        if st.button("Limpar Memória Cache"):
+            st.cache_resource.clear()
+            st.rerun()
 
-    st.subheader("📂 Documentação de Obra")
+    st.subheader("📂 Documentação")
     col1, col2 = st.columns(2)
     with col1:
         pdf_laudo = st.file_uploader("1. Laudo Técnico (PDF)", type=["pdf"])
         pdf_pls = st.file_uploader("3. PLS (PDF)", type=["pdf"])
     with col2:
-        excel_template = st.file_uploader("2. Planilha RAE (.xlsm)", type=["xlsm"])
+        excel_template = st.file_uploader("2. Modelo RAE (.xlsm)", type=["xlsm"])
         pdf_alvara = st.file_uploader("4. Alvará (PDF/Foto)", type=["pdf"])
 
-    if st.button("🚀 PROCESSAR TODOS OS DOCUMENTOS"):
+    if st.button("🚀 PROCESSAR TUDO"):
         if not api_key or not pdf_laudo or not excel_template:
-            st.warning("A chave API, o Laudo e a Planilha RAE são campos obrigatórios.")
+            st.warning("Preencha a chave, o laudo e a planilha.")
             return
 
         try:
-            with st.status("Extraindo e cruzando dados...", expanded=True) as status:
+            with st.status("Extraindo dados (Multimodal)...", expanded=True) as status:
                 converter = get_converter()
                 texto_total = ""
 
-                # Processar Documentos
-                documentos = [("Laudo", pdf_laudo), ("PLS", pdf_pls), ("Alvará", pdf_alvara)]
-                
-                for nome, doc in documentos:
+                # Processamento Sequencial para economizar RAM
+                for nome, doc in [("LAUDO", pdf_laudo), ("PLS", pdf_pls), ("ALVARA", pdf_alvara)]:
                     if doc:
-                        st.write(f"📖 Lendo {nome} (OCR ativo)...")
+                        st.write(f"📖 Lendo {nome}...")
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                             tmp.write(doc.getbuffer())
-                            res = converter.convert(tmp.name)
-                            texto_total += f"\n--- INÍCIO DO DOCUMENTO: {nome} ---\n"
-                            texto_total += res.document.export_to_markdown()
-                            os.remove(tmp.name)
+                            tmp_path = tmp.name
+                        try:
+                            res = converter.convert(tmp_path)
+                            texto_total += f"\n--- INÍCIO: {nome} ---\n{res.document.export_to_markdown()}\n"
+                        finally:
+                            if os.path.exists(tmp_path): os.remove(tmp_path)
 
-                st.write("🧠 IA: Cruzando Laudo, PLS e Alvará...")
+                st.write("🧠 IA: Cruzando informações...")
                 prompt = f"""
-                Atue como engenheiro revisor da CAIXA. Analise os documentos e extraia estritamente os dados para este JSON.
-                Seja extremamente atento a fotos de Alvará (OCR pode ter ruídos).
+                Você é um engenheiro revisor da CAIXA. Analise os documentos e extraia estritamente para este JSON.
+                DADOS GERAIS: proponente, cpf_cnpj, ddd, telefone, endereco, bairro, cep, municipio, uf_vistoria, uf_registro, complemento, matricula, comarca, valor_terreno, valor_imovel, lat_s, long_w, etapas_original, oficio
                 
-                DADOS GERAIS:
-                - proponente, cpf_cnpj, ddd, telefone, endereco, bairro, cep, municipio, uf_vistoria, uf_registro, complemento, matricula, comarca, valor_terreno, valor_imovel, lat_s, long_w, etapas_original
-                - oficio: Número após a matrícula (ex: 12345 / 3 / CE, ofício é 3).
-                - valor_imovel: Procure o Valor Global ou Valor de Mercado do imóvel em qualquer documento.
-                
-                DADOS DA PLS:
+                DADOS PLS:
                 - contratacao: Data de contratação na PLS.
-                - percentual_pls: O valor do campo 'Mensurado Acumulado Atual' na PLS.
-                - acumulado_pls: Lista dos valores da coluna '% Acumulado' ou 'Acumulado Adotado' da PLS (Cronograma).
-                - rt_pls: Nome do Responsável Técnico pela execução na PLS.
+                - percentual_pls: Valor do 'Mensurado Acumulado Atual' na PLS.
+                - acumulado_pls: Lista dos valores da coluna '% Acumulado' do cronograma da PLS.
+                - rt_pls: Nome do Responsável Técnico na PLS.
                 
-                DADOS DO ALVARÁ:
-                - alvara_emissao: Data de emissão no Alvará.
-                - alvara_validade: Data de validade/vigência no Alvará.
-                - rt_alvara: Nome do Responsável Técnico que consta no Alvará.
+                DADOS ALVARÁ:
+                - alvara_emissao, alvara_validade, rt_alvara
+                - responsaveis_iguais: "Sim" se o RT da PLS for igual ao do Alvará, "Não" caso contrário.
                 
-                COMPARAÇÃO:
-                - responsaveis_iguais: "Sim" se o RT da PLS for a mesma pessoa do Alvará, senão "Não".
+                REGRAS CRÍTICAS:
+                1. valor_imovel: Procure por 'Valor de Mercado', 'Valor Global' ou 'Avaliação' no Laudo ou PLS.
+                2. Coordenadas: SEM letras S, N, W ou E.
+                3. JSON puro, ponto decimal.
                 
-                REGRAS: JSON puro, ponto decimal, GMS sem letras nas coordenadas.
-                CONTEÚDO: {texto_total}
+                CONTEÚDO:
+                {texto_total}
                 """
                 
                 dados = call_gemini(api_key, prompt)
+                if not dados:
+                    st.error("A IA não conseguiu processar os dados. Tente novamente.")
+                    return
 
-                st.write("📊 Preenchendo Planilha RAE...")
+                st.write("📊 Gravando no Excel...")
                 wb = load_workbook(BytesIO(excel_template.read()), keep_vba=True)
                 wb.calculation.fullCalcOnLoad = True
                 
                 def to_f(v):
-                    if isinstance(v, (int, float)): return v
                     try: return float(str(v).replace(',', '.').replace('%', '').strip())
                     except: return 0
 
                 # Aba Início Vistoria
                 if "Início Vistoria" in wb.sheetnames:
                     ws = wb["Início Vistoria"]
-                    mapping = {
+                    map_iv = {
                         "G43": "proponente", "AJ43": "cpf_cnpj", "AP43": "ddd", "AR43": "telefone",
                         "G49": "endereco", "AD49": "lat_s", "AH49": "long_w", "AL49": "complemento",
                         "G51": "bairro", "V51": "cep", "AA51": "municipio", "AS51": "uf_vistoria",
                         "AS53": "uf_registro", "G53": "valor_terreno", "Q53": "matricula",
                         "AA53": "oficio", "AJ53": "comarca"
                     }
-                    for cell, key in mapping.items():
+                    for cell, key in map_iv.items():
                         val = dados.get(key, "")
                         ws[cell] = to_f(val) if key == "valor_terreno" else str(val).upper()
                     ws["Q54"], ws["Q55"], ws["Q56"] = "Casa", "Residencial", "Vistoria para aferição de obra"
@@ -216,49 +201,38 @@ def main():
                     ws_rae = wb["RAE"]
                     ws_rae.sheet_state = 'visible'
                     
-                    # Campos específicos solicitados
+                    # Células específicas da PLS e Alvará
                     ws_rae["AH63"] = dados.get("contratacao", "")
                     ws_rae["AH66"] = to_f(dados.get("valor_imovel", 0))
                     ws_rae["AS66"] = to_f(dados.get("etapas_original", 0))
                     ws_rae["W93"] = to_f(dados.get("percentual_pls", 0))
                     
-                    # Verificação do Alvará
                     ws_rae["N95"] = "Sim" if pdf_alvara else "Não"
                     ws_rae["M96"] = dados.get("alvara_emissao", "")
                     ws_rae["W96"] = dados.get("alvara_validade", "")
                     ws_rae["W102"] = dados.get("responsaveis_iguais", "Não")
                     
-                    # Dados do Responsável selecionado (Manual)
+                    # Profissional
                     prof = PROFISSIONAIS[resp_selecionado]
                     ws_rae["I315"], ws_rae["I316"], ws_rae["U316"] = prof["empresa"].upper(), prof["cnpj"], prof["cpf_emp"]
                     ws_rae["AE315"], ws_rae["AE316"], ws_rae["AO316"] = prof["nome_resp"].upper(), prof["cpf_resp"], prof["registro"].upper()
                     
                     # Tabelas
-                    incs = dados.get("incidencias", [])
+                    incs, acus_pls, acus_prop = dados.get("incidencias", []), dados.get("acumulado_pls", []), dados.get("acumulado", [])
                     for i in range(20): ws_rae[f"S{69+i}"] = to_f(incs[i]) if i < len(incs) else 0
-                    
-                    # Acumulado PLS (AH72 até AH108)
-                    acus_pls = dados.get("acumulado_pls", [])
                     for i in range(len(acus_pls)):
                         if i < 37: ws_rae[f"AH{72+i}"] = to_f(acus_pls[i])
-                    
-                    # Acumulado Proposto (Manteve na coluna AE caso queira manter o original)
-                    acus_prop = dados.get("acumulado", [])
                     for i in range(len(acus_prop)):
                         if i < 37: ws_rae[f"AE{72+i}"] = to_f(acus_prop[i])
 
                 output = BytesIO()
                 wb.save(output)
-                
-                proponente = dados.get("proponente", "").strip()
-                primeiro_nome = proponente.split(' ')[0].upper() if proponente else "FINAL"
-                
-                status.update(label="✅ Todos os documentos processados!", state="complete", expanded=False)
+                status.update(label="✅ Concluído!", state="complete", expanded=False)
                 st.balloons()
-                st.download_button(label=f"📥 BAIXAR RAE - {primeiro_nome}", data=output.getvalue(), file_name=f"RAE_{primeiro_nome}.xlsm", mime="application/vnd.ms-excel.sheet.macroEnabled.12")
+                st.download_button(label="📥 DESCARREGAR RAE PREENCHIDA", data=output.getvalue(), file_name=f"RAE_{resp_selecionado.split()[0]}.xlsm", mime="application/vnd.ms-excel.sheet.macroEnabled.12")
 
         except Exception as e:
-            st.error(f"Erro no processamento: {e}")
+            st.error(f"Erro técnico: {e}")
 
 if __name__ == "__main__":
     main()
