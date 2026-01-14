@@ -5,14 +5,13 @@ import re
 import json
 import time
 import tempfile
-import uuid
 import gc
 from io import BytesIO
 
-# --- 1. CONFIGURAÇÃO INICIAL (OBRIGATORIAMENTE O PRIMEIRO COMANDO ST) ---
+# --- 1. CONFIGURAÇÃO INICIAL (IMPRESCINDÍVEL SER A PRIMEIRA LINHA) ---
 st.set_page_config(page_title="Automação RAE CAIXA", page_icon="🏛️", layout="centered")
 
-# --- 2. PATCH DE METADADOS (EVITA CRASH NO BOOT) ---
+# --- 2. PATCH DE METADADOS PARA AMBIENTE LINUX ---
 try:
     import importlib.metadata as metadata
 except ImportError:
@@ -56,35 +55,25 @@ PROFISSIONAIS = {
     }
 }
 
-# --- 4. IMPORTAÇÕES ---
-try:
-    import pandas as pd
-    from openpyxl import load_workbook
-    from docling.document_converter import DocumentConverter, PdfFormatOption
-    from docling.datamodel.pipeline_options import PdfPipelineOptions
-    from docling.datamodel.base_models import InputFormat
-    import google.generativeai as genai
-    import onnxruntime
-    import optree
-    DEPENDENCIAS_OK = True
-except Exception as e:
-    DEPENDENCIAS_OK = False
-    ERRO_IMPORT = str(e)
-
-# --- 5. LÓGICA DE IA ---
-def get_converter_instance():
-    """Cria uma instância do conversor. Não usamos cache global para evitar acúmulo de RAM."""
-    pipeline_options = PdfPipelineOptions()
-    pipeline_options.do_table_structure = True 
-    pipeline_options.table_structure_options.do_cell_matching = True
-    return DocumentConverter(
-        allowed_formats=[InputFormat.PDF],
-        format_options={
-            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
-        }
-    )
+# --- 4. FUNÇÕES DE SUPORTE ---
+def to_f(v):
+    """Converte valores de moeda brasileira ou percentuais para float puro."""
+    try: 
+        if v is None or v == "": return 0
+        # Limpa símbolos comuns e espaços
+        clean_v = str(v).replace('R$', '').replace('%', '').strip()
+        # Lógica para converter 1.234,56 ou 1234,56 para 1234.56
+        if ',' in clean_v and '.' in clean_v:
+            clean_v = clean_v.replace('.', '').replace(',', '.')
+        elif ',' in clean_v:
+            clean_v = clean_v.replace(',', '.')
+        # Remove qualquer caractere que não seja número ou ponto
+        clean_v = re.sub(r'[^\d.]', '', clean_v)
+        return float(clean_v)
+    except: return 0
 
 def call_gemini(api_key, prompt):
+    import google.generativeai as genai
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-2.5-flash')
     for attempt in range(3):
@@ -97,10 +86,16 @@ def call_gemini(api_key, prompt):
 
 def main():
     st.title("🏛️ Automação RAE CAIXA")
-    st.markdown("##### Multidocumentos: Laudo + PLS + Alvará (OCR)")
+    st.markdown("##### Processamento Seguro: Laudo + PLS + Alvará")
 
-    if not DEPENDENCIAS_OK:
-        st.error(f"Erro Crítico: {ERRO_IMPORT}")
+    # Verifica se as dependências estão no ambiente
+    try:
+        import pandas as pd
+        from openpyxl import load_workbook
+        DEPENDENCIAS_OK = True
+    except ImportError as e:
+        st.error(f"Erro de inicialização: {e}")
+        st.info("Verifique se o seu requirements.txt está correto.")
         return
 
     with st.sidebar:
@@ -110,7 +105,7 @@ def main():
         st.subheader("👤 Responsável Técnico")
         resp_selecionado = st.selectbox("Selecione o Profissional:", options=list(PROFISSIONAIS.keys()))
         st.divider()
-        st.caption("v3.8 - Otimização de RAM (Sequential)")
+        st.caption("v3.9 - Estabilidade Reforçada")
 
     st.subheader("📂 Documentação")
     col1, col2 = st.columns(2)
@@ -121,16 +116,20 @@ def main():
         excel_template = st.file_uploader("2. Modelo RAE (.xlsm)", type=["xlsm"])
         pdf_alvara = st.file_uploader("4. Alvará (PDF/Foto)", type=["pdf"])
 
-    if st.button("🚀 PROCESSAR TUDO"):
+    if st.button("🚀 INICIAR PROCESSAMENTO SEQUENCIAL"):
         if not api_key or not pdf_laudo or not excel_template:
-            st.warning("Preencha a chave, o laudo e a planilha.")
+            st.warning("Preencha a chave, o laudo e a planilha modelo.")
             return
 
         try:
-            with st.status("Extraindo dados com segurança de memória...", expanded=True) as status:
+            with st.status("Extraindo dados um por um (Economizando RAM)...", expanded=True) as status:
                 texto_total = ""
 
-                # Processamento Sequencial Estrito para economizar RAM
+                # IMPORTAÇÃO ATRASADA DO DOCLING PARA EVITAR CRASH NO BOOT
+                from docling.document_converter import DocumentConverter, PdfFormatOption
+                from docling.datamodel.pipeline_options import PdfPipelineOptions
+                from docling.datamodel.base_models import InputFormat
+
                 documentos_para_processar = [
                     ("LAUDO", pdf_laudo),
                     ("PLS", pdf_pls),
@@ -139,61 +138,61 @@ def main():
 
                 for nome, doc in documentos_para_processar:
                     if doc:
-                        st.write(f"📖 Lendo {nome} (Limpando memória antes)...")
-                        # Força limpeza de memória antes de cada conversão
-                        gc.collect() 
+                        st.write(f"📖 Processando {nome}...")
+                        gc.collect() # Libera RAM antes de começar
                         
-                        # Criamos o conversor apenas para este arquivo e deletamos depois
-                        converter = get_converter_instance()
+                        # Opções de pipeline leves
+                        pipeline_options = PdfPipelineOptions()
+                        pipeline_options.do_table_structure = True
+                        
+                        converter = DocumentConverter(
+                            allowed_formats=[InputFormat.PDF],
+                            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
+                        )
                         
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                             tmp.write(doc.getbuffer())
                             tmp_path = tmp.name
+                        
                         try:
                             res = converter.convert(tmp_path)
                             texto_total += f"\n--- INÍCIO: {nome} ---\n{res.document.export_to_markdown()}\n"
                             
-                            # Limpeza imediata de objetos pesados
+                            # Mata os objetos pesados imediatamente
                             del res
                             del converter
                             gc.collect() 
                         finally:
                             if os.path.exists(tmp_path): os.remove(tmp_path)
 
-                st.write("🧠 IA: Cruzando informações de todos os documentos...")
+                st.write("🧠 IA: Cruzando e analisando dados...")
                 prompt = f"""
-                Você é um engenheiro revisor da CAIXA. Analise os documentos e extraia estritamente para este JSON.
+                Você é um engenheiro revisor da CAIXA. Analise os documentos e retorne JSON puro.
                 
-                DADOS GERAIS: 
+                MAPEAMENTO: 
                 - proponente, cpf_cnpj, ddd, telefone, endereco, bairro, cep, municipio, uf_vistoria, uf_registro, complemento, matricula, comarca, valor_terreno, valor_imovel, lat_s, long_w, etapas_original, oficio
                 
-                REGRAS ESPECÍFICAS:
-                1. valor_imovel: É OBRIGATÓRIO. Procure por 'Valor de Mercado', 'Valor Global', 'Avaliação Final' ou 'Total do Imóvel'.
-                2. contratacao: Data de contratação na PLS (AH63).
-                3. percentual_pls: 'Mensurado Acumulado Atual' da PLS (W93).
-                4. acumulado_pls: Lista da coluna '% Acumulado' da PLS (AH72:AH108).
-                5. alvara: Data emissão (M96) e validade (W96). Marque responsaveis_iguais como 'Sim' se o RT da PLS for o mesmo do Alvará.
-                6. Coordenadas: Apenas números e símbolos de graus (ex: 06°24'08.8"). Remova letras S, N, W, E.
+                REGRAS CRÍTICAS:
+                1. valor_imovel: BUSCA OBRIGATÓRIA. Procure 'Valor de Mercado', 'Avaliação' ou 'Valor Global'.
+                2. contratacao: Data na PLS (AH63).
+                3. percentual_pls: 'Mensurado Acumulado Atual' (W93).
+                4. acumulado_pls: Lista coluna '% Acumulado' da PLS (AH72:AH108).
+                5. alvara: Marque responsaveis_iguais como 'Sim' se o RT da PLS for o mesmo do Alvará.
+                6. Coordenadas: Apenas GMS (ex: 06°24'08.8"). Remova letras S, N, W, E.
                 
-                CONTEÚDO DOS DOCUMENTOS:
+                CONTEÚDO:
                 {texto_total}
                 """
                 
                 dados = call_gemini(api_key, prompt)
                 if not dados:
-                    st.error("A IA não conseguiu processar os dados. Verifique a chave API ou tente novamente.")
+                    st.error("Falha na comunicação com o Gemini. Tente novamente.")
                     return
 
-                st.write("📊 Gravando informações na planilha...")
+                st.write("📊 Gravando na Planilha RAE...")
                 wb = load_workbook(BytesIO(excel_template.read()), keep_vba=True)
                 wb.calculation.fullCalcOnLoad = True
                 
-                def to_f(v):
-                    try: 
-                        if v is None or v == "": return 0
-                        return float(str(v).replace('.', '').replace(',', '.').replace('%', '').strip())
-                    except: return 0
-
                 # Aba Início Vistoria
                 if "Início Vistoria" in wb.sheetnames:
                     ws = wb["Início Vistoria"]
@@ -217,7 +216,6 @@ def main():
                     ws_rae = wb["RAE"]
                     ws_rae.sheet_state = 'visible'
                     
-                    # Preenchimento das células solicitadas
                     ws_rae["AH63"] = str(dados.get("contratacao", ""))
                     ws_rae["AH66"] = to_f(dados.get("valor_imovel", 0))
                     ws_rae["AS66"] = to_f(dados.get("etapas_original", 0))
@@ -228,39 +226,28 @@ def main():
                     ws_rae["W96"] = str(dados.get("alvara_validade", ""))
                     ws_rae["W102"] = str(dados.get("responsaveis_iguais", "Não")).capitalize()
                     
-                    # Dados do Profissional selecionado
                     prof = PROFISSIONAIS[resp_selecionado]
-                    ws_rae["I315"] = prof["empresa"].upper()
-                    ws_rae["I316"] = prof["cnpj"]
-                    ws_rae["U316"] = prof["cpf_emp"]
-                    ws_rae["AE315"] = prof["nome_resp"].upper()
-                    ws_rae["AE316"] = prof["cpf_resp"]
-                    ws_rae["AO316"] = prof["registro"].upper()
+                    ws_rae["I315"], ws_rae["I316"], ws_rae["U316"] = prof["empresa"].upper(), prof["cnpj"], prof["cpf_emp"]
+                    ws_rae["AE315"], ws_rae["AE316"], ws_rae["AO316"] = prof["nome_resp"].upper(), prof["cpf_resp"], prof["registro"].upper()
                     
-                    # Tabelas e Cronogramas
                     incs, acus_pls, acus_prop = dados.get("incidencias", []), dados.get("acumulado_pls", []), dados.get("acumulado", [])
-                    
-                    for i in range(20): 
-                        ws_rae[f"S{69+i}"] = to_f(incs[i]) if i < len(incs) else 0
-                    
+                    for i in range(20): ws_rae[f"S{69+i}"] = to_f(incs[i]) if i < len(incs) else 0
                     for i in range(len(acus_pls)):
                         if i < 37: ws_rae[f"AH{72+i}"] = to_f(acus_pls[i])
-                    
                     for i in range(len(acus_prop)):
                         if i < 37: ws_rae[f"AE{72+i}"] = to_f(acus_prop[i])
 
                 output = BytesIO()
                 wb.save(output)
-                status.update(label="✅ Tudo pronto!", state="complete", expanded=False)
+                status.update(label="✅ Concluído!", state="complete", expanded=False)
                 st.balloons()
                 
-                # Nome do arquivo de saída
                 proponente_nome = str(dados.get("proponente", "FINAL")).split()[0].upper()
                 st.download_button(label=f"📥 BAIXAR RAE - {proponente_nome}", data=output.getvalue(), file_name=f"RAE_{proponente_nome}.xlsm", mime="application/vnd.ms-excel.sheet.macroEnabled.12")
 
         except Exception as e:
-            st.error(f"Erro técnico: {e}")
-            st.info("💡 Se o erro for 'Out of Memory', tente processar apenas o Laudo e a PLS primeiro.")
+            st.error(f"Erro no processamento: {e}")
+            st.info("💡 Se o erro persistir, tente processar sem o arquivo de Alvará para economizar memória.")
 
 if __name__ == "__main__":
     main()
