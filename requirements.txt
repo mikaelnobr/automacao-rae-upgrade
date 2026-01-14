@@ -1,0 +1,13 @@
+streamlit
+pandas
+openpyxl
+docling
+google-generativeai
+onnxruntime
+rapidocr-onnxruntime
+transformers
+timm
+pillow
+optree
+torch --index-url https://download.pytorch.org/whl/cpu
+torchvision --index-url https://download.pytorch.org/whl/cpu
