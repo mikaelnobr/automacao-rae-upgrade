@@ -8,29 +8,26 @@ import tempfile
 import gc
 from io import BytesIO
 
-# --- 1. CONFIGURAÇÃO INICIAL (OBRIGATORIAMENTE O PRIMEIRO COMANDO) ---
+# --- 1. CONFIGURAÇÃO DE PÁGINA (DEVE SER A PRIMEIRA LINHA) ---
 st.set_page_config(page_title="Automação RAE CAIXA", page_icon="🏛️", layout="centered")
 
-# --- 2. PATCH DE METADADOS PARA DOCLING ---
-# Garante que o ambiente Linux reconheça as versões mesmo sem acesso ao disco
+# --- 2. PATCH DE METADADOS ---
 try:
     import importlib.metadata as metadata
 except ImportError:
     import importlib_metadata as metadata
 
-_original_version = metadata.version
 def patched_version(package_name):
+    versions = {
+        'docling': '2.15.0', 'docling-core': '2.9.0', 'docling-parse': '2.4.0',
+        'docling-ibm-models': '1.1.0', 'pypdfium2': '4.30.0', 'openpyxl': '3.1.5',
+        'transformers': '4.40.0', 'torch': '2.2.0', 'torchvision': '0.17.0',
+        'timm': '0.9.16', 'optree': '0.11.0'
+    }
     try:
-        return _original_version(package_name)
-    except Exception:
-        versions = {
-            'docling': '2.15.0', 'docling-core': '2.9.0', 'docling-parse': '2.4.0',
-            'docling-ibm-models': '1.1.0', 'pypdfium2': '4.30.0', 'openpyxl': '3.1.5',
-            'transformers': '4.40.0', 'torch': '2.2.0', 'torchvision': '0.17.0',
-            'timm': '0.9.16', 'optree': '0.11.0'
-        }
+        return metadata.version(package_name)
+    except:
         return versions.get(package_name, "1.0.0")
-metadata.version = patched_version
 
 # --- 3. BANCO DE DADOS DE PROFISSIONAIS ---
 PROFISSIONAIS = {
@@ -56,7 +53,6 @@ PROFISSIONAIS = {
     }
 }
 
-# --- 4. FUNÇÕES AUXILIARES ---
 def to_f(v):
     try: 
         if v is None or v == "": return 0
@@ -83,7 +79,7 @@ def call_gemini(api_key, prompt):
 
 def main():
     st.title("🏛️ Automação RAE CAIXA")
-    st.markdown("##### Motor Docling: Processamento sob demanda (Modo Seguro)")
+    st.markdown("##### Motor Docling: Edição Estabilidade Máxima v5.5")
 
     with st.sidebar:
         st.header("⚙️ Configurações")
@@ -92,7 +88,8 @@ def main():
         st.subheader("👤 Responsável Técnico")
         resp_selecionado = st.selectbox("Selecione o Profissional:", options=list(PROFISSIONAIS.keys()))
         st.divider()
-        st.caption("v5.4 - Anti-Crash System")
+        st.info("💡 Se o app travar, tente processar apenas o Laudo e a PLS.")
+        st.caption("v5.5 - RAM Safety Mode")
 
     st.subheader("📂 Documentação")
     col1, col2 = st.columns(2)
@@ -103,74 +100,79 @@ def main():
         excel_template = st.file_uploader("2. Modelo RAE (.xlsm)", type=["xlsm"])
         pdf_alvara = st.file_uploader("4. Alvará (PDF/Foto)", type=["pdf"])
 
-    if st.button("🚀 INICIAR PROCESSAMENTO DOCLING"):
+    if st.button("🚀 INICIAR PROCESSAMENTO (MODO SEQUENCIAL)"):
         if not api_key or not pdf_laudo or not excel_template:
-            st.warning("A chave, o laudo e a planilha modelo são obrigatórios.")
+            st.warning("Preencha a chave, o laudo e a planilha modelo.")
             return
 
         try:
-            with st.status("Preparando ambiente e carregando IA...", expanded=True) as status:
-                # IMPORTAÇÃO ATRASADA (Só acontece ao clicar no botão, evita erro no boot)
+            with st.status("Preparando motor de IA (Aguarde...)", expanded=True) as status:
+                
+                # --- IMPORTAÇÃO INTERNA PARA ECONOMIZAR RAM NO BOOT ---
+                st.write("🔧 Carregando módulos de visão computacional...")
                 from openpyxl import load_workbook
                 from docling.document_converter import DocumentConverter, PdfFormatOption
                 from docling.datamodel.pipeline_options import PdfPipelineOptions
                 from docling.datamodel.base_models import InputFormat
-
+                
                 texto_total = ""
+                documentos = [("LAUDO", pdf_laudo), ("PLS", pdf_pls), ("ALVARÁ", pdf_alvara)]
 
-                # Processamento Sequencial Estrito
-                for nome, doc in [("LAUDO", pdf_laudo), ("PLS", pdf_pls), ("ALVARA", pdf_alvara)]:
+                for nome, doc in documentos:
                     if doc:
-                        st.write(f"📖 Docling lendo {nome}...")
-                        gc.collect() 
+                        st.write(f"📖 Processando {nome}...")
+                        gc.collect() # Limpa RAM
                         
+                        # Configuração ULTRA LEVE para evitar crash
                         pipeline_options = PdfPipelineOptions()
                         pipeline_options.do_table_structure = True
+                        pipeline_options.do_ocr = True # Necessário para o Alvará
                         
-                        # Correção da inicialização do conversor
                         converter = DocumentConverter(
                             allowed_formats=[InputFormat.PDF],
-                            format_options={
-                                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
-                            }
+                            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
                         )
                         
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                             tmp.write(doc.getbuffer())
                             tmp_path = tmp.name
+                        
                         try:
                             res = converter.convert(tmp_path)
-                            texto_total += f"\n--- INÍCIO: {nome} ---\n{res.document.export_to_markdown()}\n"
+                            texto_total += f"\n--- DOCUMENTO: {nome} ---\n{res.document.export_to_markdown()}\n"
+                            # Destruição imediata dos objetos pesados
                             del res
                             del converter
                             gc.collect() 
                         finally:
                             if os.path.exists(tmp_path): os.remove(tmp_path)
+                        
+                        st.write(f"✅ {nome} lido. Liberando memória...")
+                        time.sleep(1)
 
                 st.write("🧠 IA: Cruzando e Validando Dados...")
                 prompt = f"""
-                Atue como revisor técnico da CAIXA. Analise os textos (Laudo, PLS e Alvará) e retorne JSON puro.
-                
+                Você é um engenheiro revisor da CAIXA. Analise os textos e gere um JSON.
                 DADOS OBRIGATÓRIOS:
-                - valor_imovel: BUSQUE POR 'Avaliação Global', 'Valor de Mercado', 'Valor Total' ou 'Avaliação do Imóvel'.
-                - contratacao: Data de contratação na PLS.
-                - percentual_pls: 'Mensurado Acumulado Atual' na PLS.
-                - acumulado_pls: Lista da coluna '% Acumulado' da PLS (Cronograma).
-                - lat_s, long_w: Coordenadas em GMS (ex: 06°24'08.8"). SEM letras.
+                - valor_imovel: Procure por 'VALOR DE MERCADO', 'AVALIAÇÃO DO IMÓVEL' ou 'VALOR GLOBAL'. É O DADO MAIS IMPORTANTE.
+                - contratacao: Data da PLS (Célula AH63).
+                - percentual_pls: 'Mensurado Acumulado Atual' da PLS (Célula W93).
+                - acumulado_pls: Lista da coluna '% Acumulado' da PLS (AH72:AH108).
+                - etapas_original: Número de etapas do cronograma.
                 - alvara_emissao, alvara_validade: Datas no Alvará.
                 - responsaveis_iguais: 'Sim' se o Responsável da PLS for o mesmo do Alvará.
-                - proponente, cpf_cnpj, ddd, telefone, endereco, bairro, cep, municipio, uf_vistoria, uf_registro, matricula, oficio, comarca, valor_terreno, etapas_original.
-
-                CONTEÚDO:
+                - lat_s, long_w: Coordenadas GMS (00°00'00.0"). SEM letras.
+                
+                CONTEÚDO DOS DOCUMENTOS:
                 {texto_total}
                 """
                 
                 dados = call_gemini(api_key, prompt)
                 if not dados:
-                    st.error("Erro no processamento da IA.")
+                    st.error("Erro: A IA não conseguiu gerar os dados. Memória instável no servidor.")
                     return
 
-                st.write("📊 Gravando na planilha...")
+                st.write("📊 Gravando na Planilha RAE...")
                 wb = load_workbook(BytesIO(excel_template.read()), keep_vba=True)
                 wb.calculation.fullCalcOnLoad = True
                 
@@ -192,33 +194,34 @@ def main():
 
                 # Aba RAE
                 if "RAE" in wb.sheetnames:
-                    ws_r = wb["RAE"]
-                    ws_r.sheet_state = 'visible'
+                    ws_rae = wb["RAE"]
+                    ws_rae.sheet_state = 'visible'
                     
-                    ws_r["AH63"] = str(dados.get("contratacao", ""))
-                    ws_r["AH66"] = to_f(dados.get("valor_imovel", 0))
-                    ws_r["AS66"] = to_f(dados.get("etapas_original", 0))
-                    ws_r["W93"] = to_f(dados.get("percentual_pls", 0))
+                    ws_rae["AH63"] = str(dados.get("contratacao", ""))
+                    ws_rae["AH66"] = to_f(dados.get("valor_imovel", 0))
+                    ws_rae["AS66"] = to_f(dados.get("etapas_original", 0))
+                    ws_rae["W93"] = to_f(dados.get("percentual_pls", 0))
                     
-                    ws_r["N95"] = "Sim" if pdf_alvara else "Não"
-                    ws_r["M96"] = str(dados.get("alvara_emissao", ""))
-                    ws_r["W96"] = str(dados.get("alvara_validade", ""))
-                    ws_r["W102"] = str(dados.get("responsaveis_iguais", "Não")).capitalize()
+                    ws_rae["N95"] = "Sim" if pdf_alvara else "Não"
+                    ws_rae["M96"] = str(dados.get("alvara_emissao", ""))
+                    ws_rae["W96"] = str(dados.get("alvara_validade", ""))
+                    ws_rae["W102"] = str(dados.get("responsaveis_iguais", "Não")).capitalize()
                     
                     prof = PROFISSIONAIS[resp_selecionado]
-                    ws_r["I315"], ws_r["I316"], ws_r["U316"] = prof["empresa"].upper(), prof["cnpj"], prof["cpf_emp"]
-                    ws_r["AE315"], ws_r["AE316"], ws_r["AO316"] = prof["nome_resp"].upper(), prof["cpf_resp"], prof["registro"].upper()
+                    ws_rae["I315"], ws_rae["I316"], ws_rae["U316"] = prof["empresa"].upper(), prof["cnpj"], prof["cpf_emp"]
+                    ws_rae["AE315"], ws_rae["AE316"], ws_rae["AO316"] = prof["nome_resp"].upper(), prof["cpf_resp"], prof["registro"].upper()
                     
+                    # Cronogramas
                     incs, acus_pls, acus_prop = dados.get("incidencias", []), dados.get("acumulado_pls", []), dados.get("acumulado", [])
-                    for i in range(20): ws_r[f"S{69+i}"] = to_f(incs[i]) if i < len(incs) else 0
+                    for i in range(20): ws_rae[f"S{69+i}"] = to_f(incs[i]) if i < len(incs) else 0
                     for i in range(len(acus_pls)): 
-                        if i < 37: ws_r[f"AH{72+i}"] = to_f(acus_pls[i])
+                        if i < 37: ws_rae[f"AH{72+i}"] = to_f(acus_pls[i])
                     for i in range(len(acus_prop)):
-                        if i < 37: ws_r[f"AE{72+i}"] = to_f(acus_prop[i])
+                        if i < 37: ws_rae[f"AE{72+i}"] = to_f(acus_prop[i])
 
                 output = BytesIO()
                 wb.save(output)
-                status.update(label="✅ Tudo pronto!", state="complete", expanded=False)
+                status.update(label="✅ Concluído!", state="complete", expanded=False)
                 st.balloons()
                 
                 proponente_nome = str(dados.get("proponente", "FINAL")).split()[0].upper()
@@ -226,7 +229,7 @@ def main():
 
         except Exception as e:
             st.error(f"Erro Crítico: {e}")
-            st.info("💡 Dica: Se o erro for de memória, tente processar sem o Alvará.")
+            gc.collect()
 
 if __name__ == "__main__":
     main()
