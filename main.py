@@ -8,10 +8,11 @@ import tempfile
 import gc
 from io import BytesIO
 
-# --- 1. CONFIGURAÇÃO INICIAL ---
+# --- 1. CONFIGURAÇÃO INICIAL (OBRIGATORIAMENTE O PRIMEIRO COMANDO) ---
 st.set_page_config(page_title="Automação RAE CAIXA", page_icon="🏛️", layout="centered")
 
 # --- 2. PATCH DE METADADOS PARA DOCLING ---
+# Garante que o ambiente Linux reconheça as versões mesmo sem acesso ao disco
 try:
     import importlib.metadata as metadata
 except ImportError:
@@ -82,16 +83,7 @@ def call_gemini(api_key, prompt):
 
 def main():
     st.title("🏛️ Automação RAE CAIXA")
-    st.markdown("##### Motor Docling: Processamento Sequencial Estrito")
-
-    try:
-        from openpyxl import load_workbook
-        from docling.document_converter import DocumentConverter, PdfFormatOption
-        from docling.datamodel.pipeline_options import PdfPipelineOptions
-        from docling.datamodel.base_models import InputFormat
-    except ImportError as e:
-        st.error(f"Erro de bibliotecas: {e}")
-        return
+    st.markdown("##### Motor Docling: Processamento sob demanda (Modo Seguro)")
 
     with st.sidebar:
         st.header("⚙️ Configurações")
@@ -100,7 +92,7 @@ def main():
         st.subheader("👤 Responsável Técnico")
         resp_selecionado = st.selectbox("Selecione o Profissional:", options=list(PROFISSIONAIS.keys()))
         st.divider()
-        st.caption("v5.3 - Docling Native Mode")
+        st.caption("v5.4 - Anti-Crash System")
 
     st.subheader("📂 Documentação")
     col1, col2 = st.columns(2)
@@ -117,22 +109,30 @@ def main():
             return
 
         try:
-            with st.status("Extraindo dados via Docling...", expanded=True) as status:
+            with st.status("Preparando ambiente e carregando IA...", expanded=True) as status:
+                # IMPORTAÇÃO ATRASADA (Só acontece ao clicar no botão, evita erro no boot)
+                from openpyxl import load_workbook
+                from docling.document_converter import DocumentConverter, PdfFormatOption
+                from docling.datamodel.pipeline_options import PdfPipelineOptions
+                from docling.datamodel.base_models import InputFormat
+
                 texto_total = ""
 
-                # Processamento Sequencial para economizar RAM
+                # Processamento Sequencial Estrito
                 for nome, doc in [("LAUDO", pdf_laudo), ("PLS", pdf_pls), ("ALVARA", pdf_alvara)]:
                     if doc:
                         st.write(f"📖 Docling lendo {nome}...")
                         gc.collect() 
                         
-                        # Criamos o conversor apenas para este arquivo
                         pipeline_options = PdfPipelineOptions()
                         pipeline_options.do_table_structure = True
                         
+                        # Correção da inicialização do conversor
                         converter = DocumentConverter(
                             allowed_formats=[InputFormat.PDF],
-                            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
+                            format_options={
+                                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+                            }
                         )
                         
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -147,12 +147,12 @@ def main():
                         finally:
                             if os.path.exists(tmp_path): os.remove(tmp_path)
 
-                st.write("🧠 IA: Cruzando dados extraídos...")
+                st.write("🧠 IA: Cruzando e Validando Dados...")
                 prompt = f"""
-                Atue como revisor técnico da CAIXA. Analise o texto abaixo vindo de (Laudo, PLS e Alvará) e retorne JSON puro.
+                Atue como revisor técnico da CAIXA. Analise os textos (Laudo, PLS e Alvará) e retorne JSON puro.
                 
                 DADOS OBRIGATÓRIOS:
-                - valor_imovel: BUSQUE POR 'Avaliação Global', 'Valor de Mercado' ou 'Total do Imóvel'.
+                - valor_imovel: BUSQUE POR 'Avaliação Global', 'Valor de Mercado', 'Valor Total' ou 'Avaliação do Imóvel'.
                 - contratacao: Data de contratação na PLS.
                 - percentual_pls: 'Mensurado Acumulado Atual' na PLS.
                 - acumulado_pls: Lista da coluna '% Acumulado' da PLS (Cronograma).
@@ -218,7 +218,7 @@ def main():
 
                 output = BytesIO()
                 wb.save(output)
-                status.update(label="✅ Processamento Docling concluído!", state="complete", expanded=False)
+                status.update(label="✅ Tudo pronto!", state="complete", expanded=False)
                 st.balloons()
                 
                 proponente_nome = str(dados.get("proponente", "FINAL")).split()[0].upper()
@@ -226,6 +226,7 @@ def main():
 
         except Exception as e:
             st.error(f"Erro Crítico: {e}")
+            st.info("💡 Dica: Se o erro for de memória, tente processar sem o Alvará.")
 
 if __name__ == "__main__":
     main()
