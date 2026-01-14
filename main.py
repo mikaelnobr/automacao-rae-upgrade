@@ -92,6 +92,7 @@ st.markdown("""
 def get_converter():
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_table_structure = True 
+    pipeline_options.table_structure_options.do_cell_matching = True
     return DocumentConverter(
         allowed_formats=[InputFormat.PDF],
         format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
@@ -110,7 +111,7 @@ def call_gemini(api_key, prompt):
 
 def main():
     st.title("🏛️ Automação RAE CAIXA")
-    st.markdown("##### Inteligência Artificial para Engenharia (Laudo + PLS + Alvará)")
+    st.markdown("##### IA Avançada: Laudo + PLS + Alvará (OCR Integrado)")
 
     if not DEPENDENCIAS_OK:
         st.error(f"Erro de dependências: {ERRO_IMPORT}")
@@ -122,33 +123,33 @@ def main():
         st.divider()
         st.subheader("👤 Responsável Técnico")
         resp_selecionado = st.selectbox("Selecione o Profissional:", options=list(PROFISSIONAIS.keys()))
-        st.caption("v4.0 - Multi-Documentos")
+        st.caption("v5.0 - Multidocumentos & OCR")
 
-    st.subheader("📂 Upload de Documentos")
+    st.subheader("📂 Documentação de Obra")
     col1, col2 = st.columns(2)
     with col1:
         pdf_laudo = st.file_uploader("1. Laudo Técnico (PDF)", type=["pdf"])
-        pdf_pls = st.file_uploader("3. PLS (PDF) - Opcional", type=["pdf"])
+        pdf_pls = st.file_uploader("3. PLS (PDF)", type=["pdf"])
     with col2:
         excel_template = st.file_uploader("2. Planilha RAE (.xlsm)", type=["xlsm"])
-        pdf_alvara = st.file_uploader("4. Alvará (PDF) - Opcional", type=["pdf"])
+        pdf_alvara = st.file_uploader("4. Alvará (PDF/Foto)", type=["pdf"])
 
-    if st.button("🚀 INICIAR PROCESSAMENTO COMPLETO"):
+    if st.button("🚀 PROCESSAR TODOS OS DOCUMENTOS"):
         if not api_key or not pdf_laudo or not excel_template:
-            st.warning("A chave API, o Laudo e a Planilha são obrigatórios.")
+            st.warning("A chave API, o Laudo e a Planilha RAE são campos obrigatórios.")
             return
 
         try:
-            with st.status("Processando documentos...", expanded=True) as status:
+            with st.status("Extraindo e cruzando dados...", expanded=True) as status:
                 converter = get_converter()
                 texto_total = ""
 
-                # Processar Documentos Enviados
+                # Processar Documentos
                 documentos = [("Laudo", pdf_laudo), ("PLS", pdf_pls), ("Alvará", pdf_alvara)]
                 
                 for nome, doc in documentos:
                     if doc:
-                        st.write(f"📖 Lendo {nome}...")
+                        st.write(f"📖 Lendo {nome} (OCR ativo)...")
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                             tmp.write(doc.getbuffer())
                             res = converter.convert(tmp.name)
@@ -156,22 +157,37 @@ def main():
                             texto_total += res.document.export_to_markdown()
                             os.remove(tmp.name)
 
-                st.write("🧠 IA: Analisando e cruzando informações...")
+                st.write("🧠 IA: Cruzando Laudo, PLS e Alvará...")
                 prompt = f"""
-                Atue como engenheiro revisor da CAIXA. Analise os documentos (Laudo, PLS, Alvará) e extraia para JSON:
-                - CAMPOS: proponente, cpf_cnpj, ddd, telefone, endereco, bairro, cep, municipio, uf_vistoria, uf_registro, complemento, matricula, comarca, valor_terreno, valor_imovel, lat_s, long_w, etapas_original
-                - OFICIO: Número após a matrícula em DOCUMENTOS (ex: 12345 / 3 / CE, ofício é 3).
-                - COORDENADAS: GMS puro (ex: 06°24'08.8"). SEM letras.
-                - CRONOGRAMA: etapas_original (Identifique no Cronograma da PLS ou do Laudo).
-                - TABELAS: 'incidencias' (20 números coluna PESO % do orçamento), 'acumulado' (percentuais % ACUMULADO do cronograma).
+                Atue como engenheiro revisor da CAIXA. Analise os documentos e extraia estritamente os dados para este JSON.
+                Seja extremamente atento a fotos de Alvará (OCR pode ter ruídos).
                 
-                CONTEÚDO DOS DOCUMENTOS:
-                {texto_total}
+                DADOS GERAIS:
+                - proponente, cpf_cnpj, ddd, telefone, endereco, bairro, cep, municipio, uf_vistoria, uf_registro, complemento, matricula, comarca, valor_terreno, valor_imovel, lat_s, long_w, etapas_original
+                - oficio: Número após a matrícula (ex: 12345 / 3 / CE, ofício é 3).
+                - valor_imovel: Procure o Valor Global ou Valor de Mercado do imóvel em qualquer documento.
+                
+                DADOS DA PLS:
+                - contratacao: Data de contratação na PLS.
+                - percentual_pls: O valor do campo 'Mensurado Acumulado Atual' na PLS.
+                - acumulado_pls: Lista dos valores da coluna '% Acumulado' ou 'Acumulado Adotado' da PLS (Cronograma).
+                - rt_pls: Nome do Responsável Técnico pela execução na PLS.
+                
+                DADOS DO ALVARÁ:
+                - alvara_emissao: Data de emissão no Alvará.
+                - alvara_validade: Data de validade/vigência no Alvará.
+                - rt_alvara: Nome do Responsável Técnico que consta no Alvará.
+                
+                COMPARAÇÃO:
+                - responsaveis_iguais: "Sim" se o RT da PLS for a mesma pessoa do Alvará, senão "Não".
+                
+                REGRAS: JSON puro, ponto decimal, GMS sem letras nas coordenadas.
+                CONTEÚDO: {texto_total}
                 """
                 
                 dados = call_gemini(api_key, prompt)
 
-                st.write("📊 Gravando na planilha...")
+                st.write("📊 Preenchendo Planilha RAE...")
                 wb = load_workbook(BytesIO(excel_template.read()), keep_vba=True)
                 wb.calculation.fullCalcOnLoad = True
                 
@@ -180,6 +196,7 @@ def main():
                     try: return float(str(v).replace(',', '.').replace('%', '').strip())
                     except: return 0
 
+                # Aba Início Vistoria
                 if "Início Vistoria" in wb.sheetnames:
                     ws = wb["Início Vistoria"]
                     mapping = {
@@ -194,20 +211,41 @@ def main():
                         ws[cell] = to_f(val) if key == "valor_terreno" else str(val).upper()
                     ws["Q54"], ws["Q55"], ws["Q56"] = "Casa", "Residencial", "Vistoria para aferição de obra"
 
+                # Aba RAE
                 if "RAE" in wb.sheetnames:
                     ws_rae = wb["RAE"]
                     ws_rae.sheet_state = 'visible'
+                    
+                    # Campos específicos solicitados
+                    ws_rae["AH63"] = dados.get("contratacao", "")
                     ws_rae["AH66"] = to_f(dados.get("valor_imovel", 0))
                     ws_rae["AS66"] = to_f(dados.get("etapas_original", 0))
+                    ws_rae["W93"] = to_f(dados.get("percentual_pls", 0))
                     
+                    # Verificação do Alvará
+                    ws_rae["N95"] = "Sim" if pdf_alvara else "Não"
+                    ws_rae["M96"] = dados.get("alvara_emissao", "")
+                    ws_rae["W96"] = dados.get("alvara_validade", "")
+                    ws_rae["W102"] = dados.get("responsaveis_iguais", "Não")
+                    
+                    # Dados do Responsável selecionado (Manual)
                     prof = PROFISSIONAIS[resp_selecionado]
                     ws_rae["I315"], ws_rae["I316"], ws_rae["U316"] = prof["empresa"].upper(), prof["cnpj"], prof["cpf_emp"]
                     ws_rae["AE315"], ws_rae["AE316"], ws_rae["AO316"] = prof["nome_resp"].upper(), prof["cpf_resp"], prof["registro"].upper()
                     
-                    incs, acus = dados.get("incidencias", []), dados.get("acumulado", [])
+                    # Tabelas
+                    incs = dados.get("incidencias", [])
                     for i in range(20): ws_rae[f"S{69+i}"] = to_f(incs[i]) if i < len(incs) else 0
-                    for i in range(len(acus)): 
-                        if i < 37: ws_rae[f"AE{72+i}"] = to_f(acus[i])
+                    
+                    # Acumulado PLS (AH72 até AH108)
+                    acus_pls = dados.get("acumulado_pls", [])
+                    for i in range(len(acus_pls)):
+                        if i < 37: ws_rae[f"AH{72+i}"] = to_f(acus_pls[i])
+                    
+                    # Acumulado Proposto (Manteve na coluna AE caso queira manter o original)
+                    acus_prop = dados.get("acumulado", [])
+                    for i in range(len(acus_prop)):
+                        if i < 37: ws_rae[f"AE{72+i}"] = to_f(acus_prop[i])
 
                 output = BytesIO()
                 wb.save(output)
@@ -215,12 +253,12 @@ def main():
                 proponente = dados.get("proponente", "").strip()
                 primeiro_nome = proponente.split(' ')[0].upper() if proponente else "FINAL"
                 
-                status.update(label="✅ Processamento concluído!", state="complete", expanded=False)
+                status.update(label="✅ Todos os documentos processados!", state="complete", expanded=False)
                 st.balloons()
                 st.download_button(label=f"📥 BAIXAR RAE - {primeiro_nome}", data=output.getvalue(), file_name=f"RAE_{primeiro_nome}.xlsm", mime="application/vnd.ms-excel.sheet.macroEnabled.12")
 
         except Exception as e:
-            st.error(f"Erro: {e}")
+            st.error(f"Erro no processamento: {e}")
 
 if __name__ == "__main__":
     main()
