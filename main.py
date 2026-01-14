@@ -8,10 +8,10 @@ import tempfile
 import gc
 from io import BytesIO
 
-# --- 1. CONFIGURAÇÃO INICIAL (DEVE SER A PRIMEIRA LINHA) ---
+# --- 1. CONFIGURAÇÃO INICIAL ---
 st.set_page_config(page_title="Automação RAE CAIXA", page_icon="🏛️", layout="centered")
 
-# --- 2. PATCH DE METADADOS PARA AMBIENTE CLOUD ---
+# --- 2. PATCH DE METADADOS PARA DOCLING ---
 try:
     import importlib.metadata as metadata
 except ImportError:
@@ -55,11 +55,10 @@ PROFISSIONAIS = {
     }
 }
 
-# --- 4. FUNÇÕES DE SUPORTE ---
+# --- 4. FUNÇÕES AUXILIARES ---
 def to_f(v):
     try: 
         if v is None or v == "": return 0
-        # Normalização de moeda brasileira (R$ 1.234,56 -> 1234.56)
         clean_v = str(v).replace('R$', '').replace('%', '').replace(' ', '')
         if ',' in clean_v and '.' in clean_v:
             clean_v = clean_v.replace('.', '').replace(',', '.')
@@ -83,12 +82,15 @@ def call_gemini(api_key, prompt):
 
 def main():
     st.title("🏛️ Automação RAE CAIXA")
-    st.markdown("##### Estabilidade Máxima: Laudo + PLS + Alvará")
+    st.markdown("##### Motor Docling: Processamento Sequencial Estrito")
 
     try:
         from openpyxl import load_workbook
-    except ImportError:
-        st.error("Erro: openpyxl não instalado.")
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.datamodel.base_models import InputFormat
+    except ImportError as e:
+        st.error(f"Erro de bibliotecas: {e}")
         return
 
     with st.sidebar:
@@ -97,15 +99,8 @@ def main():
         st.divider()
         st.subheader("👤 Responsável Técnico")
         resp_selecionado = st.selectbox("Selecione o Profissional:", options=list(PROFISSIONAIS.keys()))
-        
         st.divider()
-        st.subheader("🛠️ Estabilidade (RAM)")
-        low_memory = st.toggle("Modo de Baixa RAM", value=True, help="Recomendado para evitar crash ao subir 3 documentos.")
-        if st.button("Limpar Cache"):
-            st.cache_resource.clear()
-            gc.collect()
-            st.rerun()
-        st.caption("v5.1 - Enhanced Prompting")
+        st.caption("v5.3 - Docling Native Mode")
 
     st.subheader("📂 Documentação")
     col1, col2 = st.columns(2)
@@ -116,30 +111,24 @@ def main():
         excel_template = st.file_uploader("2. Modelo RAE (.xlsm)", type=["xlsm"])
         pdf_alvara = st.file_uploader("4. Alvará (PDF/Foto)", type=["pdf"])
 
-    if st.button("🚀 INICIAR PROCESSAMENTO"):
+    if st.button("🚀 INICIAR PROCESSAMENTO DOCLING"):
         if not api_key or not pdf_laudo or not excel_template:
-            st.warning("Preencha a chave, o laudo e a planilha modelo.")
+            st.warning("A chave, o laudo e a planilha modelo são obrigatórios.")
             return
 
         try:
-            with st.status("Extraindo dados (Multimodal Sequencial)...", expanded=True) as status:
+            with st.status("Extraindo dados via Docling...", expanded=True) as status:
                 texto_total = ""
 
-                # IMPORTAÇÃO ATRASADA DO DOCLING
-                from docling.document_converter import DocumentConverter, PdfFormatOption
-                from docling.datamodel.pipeline_options import PdfPipelineOptions
-                from docling.datamodel.base_models import InputFormat
-
-                documentos = [("LAUDO", pdf_laudo), ("PLS", pdf_pls), ("ALVARÁ", pdf_alvara)]
-
-                for nome, doc in documentos:
+                # Processamento Sequencial para economizar RAM
+                for nome, doc in [("LAUDO", pdf_laudo), ("PLS", pdf_pls), ("ALVARA", pdf_alvara)]:
                     if doc:
-                        st.write(f"📖 Processando {nome}...")
-                        gc.collect()
+                        st.write(f"📖 Docling lendo {nome}...")
+                        gc.collect() 
                         
+                        # Criamos o conversor apenas para este arquivo
                         pipeline_options = PdfPipelineOptions()
-                        pipeline_options.do_table_structure = not low_memory
-                        pipeline_options.do_ocr = True 
+                        pipeline_options.do_table_structure = True
                         
                         converter = DocumentConverter(
                             allowed_formats=[InputFormat.PDF],
@@ -149,41 +138,39 @@ def main():
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                             tmp.write(doc.getbuffer())
                             tmp_path = tmp.name
-                        
                         try:
                             res = converter.convert(tmp_path)
-                            texto_total += f"\n--- {nome} ---\n{res.document.export_to_markdown()}\n"
+                            texto_total += f"\n--- INÍCIO: {nome} ---\n{res.document.export_to_markdown()}\n"
                             del res
                             del converter
                             gc.collect() 
                         finally:
                             if os.path.exists(tmp_path): os.remove(tmp_path)
-                        time.sleep(0.5)
 
-                st.write("🧠 IA: Cruzando e Validando Dados...")
+                st.write("🧠 IA: Cruzando dados extraídos...")
                 prompt = f"""
-                Você é um engenheiro revisor da CAIXA. Analise os documentos e gere um JSON.
+                Atue como revisor técnico da CAIXA. Analise o texto abaixo vindo de (Laudo, PLS e Alvará) e retorne JSON puro.
                 
-                MAPEAMENTO OBRIGATÓRIO: 
-                - valor_imovel: Procure por 'VALOR DE MERCADO', 'AVALIAÇÃO DO IMÓVEL', 'VALOR GLOBAL' ou 'TOTAL DA AVALIAÇÃO'. Tente extrair esse dado do LAUDO prioritariamente.
-                - lat_s, long_w: Extraia do item LOCALIZAÇÃO no LAUDO. Formato GMS (00°00'00.0"). Remova letras S, N, W, E.
-                - contratacao: Data da PLS (AH63).
-                - percentual_pls: 'Mensurado Acumulado Atual' (W93).
-                - acumulado_pls: Lista coluna '% Acumulado' da PLS (AH72:AH108).
-                - etapas_original: Número total de etapas no cronograma.
-                - alvara_emissao, alvara_validade: Procure no documento ALVARÁ.
-                - proponente, cpf_cnpj, ddd, telefone, endereco, bairro, cep, municipio, uf_vistoria, uf_registro, matricula, oficio, comarca, valor_terreno.
+                DADOS OBRIGATÓRIOS:
+                - valor_imovel: BUSQUE POR 'Avaliação Global', 'Valor de Mercado' ou 'Total do Imóvel'.
+                - contratacao: Data de contratação na PLS.
+                - percentual_pls: 'Mensurado Acumulado Atual' na PLS.
+                - acumulado_pls: Lista da coluna '% Acumulado' da PLS (Cronograma).
+                - lat_s, long_w: Coordenadas em GMS (ex: 06°24'08.8"). SEM letras.
+                - alvara_emissao, alvara_validade: Datas no Alvará.
+                - responsaveis_iguais: 'Sim' se o Responsável da PLS for o mesmo do Alvará.
+                - proponente, cpf_cnpj, ddd, telefone, endereco, bairro, cep, municipio, uf_vistoria, uf_registro, matricula, oficio, comarca, valor_terreno, etapas_original.
 
-                CONTEÚDO EXTRAÍDO:
+                CONTEÚDO:
                 {texto_total}
                 """
                 
                 dados = call_gemini(api_key, prompt)
                 if not dados:
-                    st.error("Erro: A IA não conseguiu gerar os dados. Memória instável.")
+                    st.error("Erro no processamento da IA.")
                     return
 
-                st.write("📊 Gravando na Planilha RAE...")
+                st.write("📊 Gravando na planilha...")
                 wb = load_workbook(BytesIO(excel_template.read()), keep_vba=True)
                 wb.calculation.fullCalcOnLoad = True
                 
@@ -231,7 +218,7 @@ def main():
 
                 output = BytesIO()
                 wb.save(output)
-                status.update(label="✅ Tudo pronto!", state="complete", expanded=False)
+                status.update(label="✅ Processamento Docling concluído!", state="complete", expanded=False)
                 st.balloons()
                 
                 proponente_nome = str(dados.get("proponente", "FINAL")).split()[0].upper()
